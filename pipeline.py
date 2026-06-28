@@ -26,7 +26,14 @@ client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 SCRIPT_MODEL  = "gemini-3.1-flash-lite"
 IMAGE_MODEL   = "imagen-4.0-fast-generate-001"
 TTS_MODEL     = "gemini-2.5-flash-preview-tts"
-IMAGE_QUOTA   = 25          # first N segments use Gemini image; rest use Pollinations
+IMAGE_QUOTA   = 25          # first N segments use Imagen; rest use Pollinations
+STYLE_SUFFIX  = (
+    "2D flat cartoon illustration, simple thick black outlines, "
+    "flat solid colors, light mint green background, educational YouTube explainer "
+    "animation style, round-head stick figures, minimalist icons and symbols, "
+    "clean vector art, bold simple shapes, no photorealism, no gradients, "
+    "no shadows, similar to Kurzgesagt explainer animation"
+)
 TARGET_SEGS   = 70
 WORDS_PER_SEG = 22
 MAX_RETRIES   = 3
@@ -64,6 +71,16 @@ def generate_script(topic: str) -> dict:
         f"- Each segment has ~{WORDS_PER_SEG} spoken words (narrator text)\n"
         f"- Each segment has a short, vivid visual_prompt for AI image generation\n"
         f"- Output ONLY valid JSON, no markdown fences, no extra text\n\n"
+        f"For each segment's visual_prompt, describe a simple 2D cartoon scene with: "
+        f"flat cartoon characters with round heads and simple features, "
+        f"specific simple icons or objects relevant to the topic, "
+        f"light colored background (mint green, light blue, or white), "
+        f"clear action or emotion, text labels or signs where helpful, simple props. "
+        f"DO NOT describe photographic or cinematic scenes.\n"
+        f"Example good prompt: 'round-head cartoon historian character holding a magnifying glass, "
+        f"examining ancient stone bricks, light blue background, speech bubble saying Ancient Secrets, "
+        f"simple flat icons of wall and mountains'\n"
+        f"Example bad prompt: 'dramatic cinematic shot of the Great Wall at sunset'\n\n"
         f"Format:\n"
         '{"title": "...", "segments": [{"text": "...", "visual_prompt": "..."}]}'
     )
@@ -87,10 +104,12 @@ def generate_script(topic: str) -> dict:
 
 def generate_image_imagen(visual_prompt: str, out_path: Path):
     """Generate image using Imagen 4 Fast."""
+    full_prompt = f"{visual_prompt}, {STYLE_SUFFIX}"
+
     def _call():
         response = client.models.generate_images(
             model=IMAGE_MODEL,
-            prompt=visual_prompt,
+            prompt=full_prompt,
             config={"number_of_images": 1, "aspect_ratio": "16:9"},
         )
         image_bytes = response.generated_images[0].image.image_bytes
@@ -99,13 +118,18 @@ def generate_image_imagen(visual_prompt: str, out_path: Path):
     retry(_call, label=f"Imagen {out_path.name}")
 
 
-def generate_image_pollinations(visual_prompt: str, out_path: Path):
+def generate_image_pollinations(visual_prompt: str, out_path: Path, seed: int = 42):
     """Generate image via Pollinations.ai free API."""
-    safe = urllib.parse.quote(visual_prompt[:200])
-    url = f"https://image.pollinations.ai/prompt/{safe}?width=1280&height=720&nologo=true"
+    full_prompt = f"{visual_prompt}, {STYLE_SUFFIX}"
+    safe = urllib.parse.quote(full_prompt[:400])
+    url = (
+        f"https://image.pollinations.ai/prompt/{safe}"
+        f"?width=1280&height=720&nologo=true&seed={seed}&model=flux&enhance=false"
+        f"&negative=photorealistic,photograph,3d render,dark background,complex details"
+    )
 
     def _call():
-        Path(out_path).write_bytes(requests.get(url, timeout=30).content)
+        Path(out_path).write_bytes(requests.get(url, timeout=60).content)
 
     retry(_call, label=f"Pollinations {out_path.name}")
 
@@ -122,7 +146,7 @@ def generate_images(segments: list, out_dir: Path):
         if i < IMAGE_QUOTA:
             generate_image_imagen(vp, out_path)
         else:
-            generate_image_pollinations(vp, out_path)
+            generate_image_pollinations(vp, out_path, seed=i)
 
         print(f"  Segment {i+1}/{total} — image done")
 
