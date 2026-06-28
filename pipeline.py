@@ -8,6 +8,7 @@ import os
 import json
 import time
 import wave
+import base64
 import subprocess
 import urllib.parse
 import requests
@@ -128,15 +129,6 @@ def generate_images(segments: list, out_dir: Path):
 
 # ── Step 3: Voiceover (TTS) ───────────────────────────────────────────────────
 
-def pcm_to_wav(pcm_bytes: bytes, out_path: Path, sample_rate: int = 24000):
-    """Wrap raw 16-bit mono PCM bytes in a WAV container."""
-    with wave.open(str(out_path), "wb") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(sample_rate)
-        wf.writeframes(pcm_bytes)
-
-
 def generate_audio(text: str, out_path: Path):
     """Generate a WAV clip for one segment using Gemini TTS."""
     def _call():
@@ -154,8 +146,13 @@ def generate_audio(text: str, out_path: Path):
                 ),
             ),
         )
-        pcm = response.candidates[0].content.parts[0].inline_data.data
-        pcm_to_wav(pcm, out_path)
+        # inline_data.data is base64-encoded raw PCM from the API
+        pcm_data = base64.b64decode(response.candidates[0].content.parts[0].inline_data.data)
+        with wave.open(str(out_path), "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(24000)
+            wav_file.writeframes(pcm_data)
 
     retry(_call, label=f"TTS {out_path.name}")
 
