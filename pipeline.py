@@ -9,8 +9,8 @@ import json
 import time
 import wave
 import subprocess
-import urllib.request
 import urllib.parse
+import requests
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -23,7 +23,7 @@ load_dotenv()
 client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
 SCRIPT_MODEL  = "gemini-3.1-flash-lite"
-IMAGE_MODEL   = "gemini-3.1-flash-image"
+IMAGE_MODEL   = "imagen-4.0-fast-generate-001"
 TTS_MODEL     = "gemini-2.5-flash-preview-tts"
 IMAGE_QUOTA   = 25          # first N segments use Gemini image; rest use Pollinations
 TARGET_SEGS   = 70
@@ -84,33 +84,27 @@ def generate_script(topic: str) -> dict:
 
 # ── Step 2: Images ────────────────────────────────────────────────────────────
 
-def generate_image_gemini(visual_prompt: str, out_path: Path):
-    """Generate image via Gemini image model."""
+def generate_image_imagen(visual_prompt: str, out_path: Path):
+    """Generate image using Imagen 4 Fast."""
     def _call():
         response = client.models.generate_images(
             model=IMAGE_MODEL,
             prompt=visual_prompt,
-            config=types.GenerateImagesConfig(
-                number_of_images=1,
-                aspect_ratio="16:9",
-            ),
+            config={"number_of_images": 1, "aspect_ratio": "16:9"},
         )
-        img_bytes = response.generated_images[0].image.image_bytes
-        out_path.write_bytes(img_bytes)
+        image_bytes = response.generated_images[0].image.image_bytes
+        Path(out_path).write_bytes(image_bytes)
 
-    retry(_call, label=f"Gemini image {out_path.name}")
+    retry(_call, label=f"Imagen {out_path.name}")
 
 
 def generate_image_pollinations(visual_prompt: str, out_path: Path):
     """Generate image via Pollinations.ai free API."""
-    encoded = urllib.parse.quote(visual_prompt)
-    url = f"https://image.pollinations.ai/prompt/{encoded}?width=1280&height=720&nologo=true"
+    safe = urllib.parse.quote(visual_prompt[:200])
+    url = f"https://image.pollinations.ai/prompt/{safe}?width=1280&height=720&nologo=true"
 
     def _call():
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            data = resp.read()
-        out_path.write_bytes(data)
+        Path(out_path).write_bytes(requests.get(url, timeout=30).content)
 
     retry(_call, label=f"Pollinations {out_path.name}")
 
@@ -125,7 +119,7 @@ def generate_images(segments: list, out_dir: Path):
 
         vp = seg["visual_prompt"]
         if i < IMAGE_QUOTA:
-            generate_image_gemini(vp, out_path)
+            generate_image_imagen(vp, out_path)
         else:
             generate_image_pollinations(vp, out_path)
 
